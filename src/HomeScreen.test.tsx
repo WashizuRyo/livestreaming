@@ -3,14 +3,22 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import HomeScreen from './HomeScreen';
-import { fetchMostViewedPrograms } from './nico/api';
+import { fetchFollowingPrograms, fetchMostViewedPrograms } from './nico/api';
 import type { Program } from './nico/schema';
 
-vi.mock('./nico/api', () => ({ fetchMostViewedPrograms: vi.fn() }));
+vi.mock('./nico/api', () => ({
+  fetchFollowingPrograms: vi.fn(),
+  fetchMostViewedPrograms: vi.fn(),
+}));
 
+vi.mock('react-native-webview', () => ({ default: () => null }));
+
+const fetchFollowingProgramsMock = vi.mocked(fetchFollowingPrograms);
 const fetchMostViewedProgramsMock = vi.mocked(fetchMostViewedPrograms);
 
 beforeEach(() => {
+  vi.resetAllMocks();
+  fetchFollowingProgramsMock.mockResolvedValue({ loggedIn: false, programs: [] });
   fetchMostViewedProgramsMock.mockResolvedValue([]);
 });
 
@@ -18,106 +26,128 @@ afterEach(() => {
   cleanup();
 });
 
-function renderScreen(
-  options: {
-    loadFollowing?: () => Promise<{ loggedIn: boolean; programs: Program[] }>;
-    onLogin?: () => void;
-    sessionReady?: boolean;
-  } = {},
-) {
+function renderScreen() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  const loadFollowing =
-    options.loadFollowing ?? vi.fn().mockResolvedValue({ loggedIn: false, programs: [] });
-  const onLogin = options.onLogin ?? vi.fn();
   render(
     <QueryClientProvider client={client}>
-      <HomeScreen
-        loadFollowing={loadFollowing}
-        onLogin={onLogin}
-        onLogout={() => {}}
-        sessionReady={options.sessionReady ?? true}
-      />
+      <HomeScreen />
     </QueryClientProvider>,
   );
 }
 
 describe('トップ画面', () => {
-  it('視聴数順の番組を表示し、未ログインならログインへ進める', async () => {
-    const onLogin = vi.fn();
+  it('未ログインの場合は案内文とログインボタンを表示する', async () => {
+    renderScreen();
+
+    expect(
+      await screen.findByText('ログインすると、フォロー中の放送を表示できます。'),
+    ).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'ログイン' })).toBeTruthy();
+    expect(screen.queryByText('ログイン中')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'ログアウト' })).toBeNull();
+  });
+
+  it('ログイン済みの場合はフォロー中とランキングの番組一覧を表示する', async () => {
+    fetchFollowingProgramsMock.mockResolvedValue({
+      loggedIn: true,
+      programs: [
+        {
+          id: 'lv100',
+          title: 'フォローしている番組',
+          providerType: 'community',
+          liveCycle: 'ON_AIR',
+          isFollowerOnly: false,
+          isPayProgram: false,
+          listingThumbnail: 'https://example.com/thumbnail.jpg',
+          beginAt: 1_700_000_200,
+          programProvider: { id: '100', name: '配信者A', icon: '' },
+          statistics: { watchCount: 1234, commentCount: 32 },
+        },
+      ] satisfies Program[],
+    });
     fetchMostViewedProgramsMock.mockResolvedValue([
       {
-        id: 'lv100',
-        title: '人気の放送',
+        id: 'lv200',
+        title: 'ランキングの放送',
         providerType: 'community',
         liveCycle: 'ON_AIR',
         isFollowerOnly: false,
         isPayProgram: false,
         listingThumbnail: 'https://example.com/thumbnail.jpg',
-        beginAt: 1_700_000_000,
-        programProvider: { id: '100', name: '配信者A', icon: '' },
-        socialGroup: { name: 'コミュニティA' },
-        statistics: { watchCount: 120, commentCount: 10 },
-      },
-    ]);
-    renderScreen({ onLogin });
-
-    expect(await screen.findByText('人気の放送')).toBeTruthy();
-    expect(screen.getByText('視聴数 120')).toBeTruthy();
-    expect(screen.getByText('ログインして表示')).toBeTruthy();
-    fireEvent.click(screen.getByText('ログインして表示'));
-    expect(onLogin).toHaveBeenCalledOnce();
-  });
-
-  it('ログイン済みならフォロー中の放送を表示し、再取得できる', async () => {
-    const loadFollowing = vi.fn().mockResolvedValue({
-      loggedIn: true,
-      programs: [
-        {
-          id: 'lv200',
-          title: 'フォロー中の放送A',
-          providerType: 'community',
-          liveCycle: 'ON_AIR',
-          isFollowerOnly: false,
-          isPayProgram: false,
-          listingThumbnail: 'https://example.com/followed-thumbnail.jpg',
-          beginAt: 1_700_000_100,
-          programProvider: { id: '200', name: '配信者B', icon: '' },
-          socialGroup: { name: 'コミュニティB' },
-          statistics: { watchCount: 42, commentCount: 4 },
-        },
-      ],
-    });
-    renderScreen({ loadFollowing });
-
-    expect(await screen.findByText('フォロー中の放送A')).toBeTruthy();
-    expect(screen.queryByText('ログインして表示')).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: '番組一覧を更新' }));
-    await waitFor(() => {
-      expect(loadFollowing).toHaveBeenCalledTimes(2);
-      expect(fetchMostViewedProgramsMock).toHaveBeenCalledTimes(2);
-    });
-  });
-
-  it('ランキング取得関数の結果を画面に表示する', async () => {
-    fetchMostViewedProgramsMock.mockResolvedValue([
-      {
-        id: 'lv300',
-        title: '人気の放送',
-        providerType: 'community',
-        liveCycle: 'ON_AIR',
-        isFollowerOnly: false,
-        isPayProgram: false,
-        listingThumbnail: 'https://example.com/api-thumbnail.jpg',
         beginAt: 1_700_000_200,
-        programProvider: { id: '300', name: '配信者C', icon: '' },
-        socialGroup: { name: 'コミュニティC' },
-        statistics: { watchCount: 321, commentCount: 32 },
+        programProvider: { id: '200', name: '配信者B', icon: '' },
+        statistics: { watchCount: 1234, commentCount: 32 },
       },
     ] satisfies Program[]);
     renderScreen();
 
-    expect(await screen.findByText('人気の放送')).toBeTruthy();
-    expect(screen.getByText('視聴数 321')).toBeTruthy();
+    expect(await screen.findByText('配信者A')).toBeTruthy();
+    expect(screen.getByText('フォローしている番組')).toBeTruthy();
+    expect(await screen.findByText('ランキングの放送')).toBeTruthy();
+    expect(screen.getByText('配信者B')).toBeTruthy();
+    expect(screen.getAllByText('視聴数 1,234')).toHaveLength(2);
+    expect(screen.getByText('ログイン中')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'ログアウト' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'ログイン' })).toBeNull();
+  });
+
+  it('更新ボタンを押すと両方の一覧を再取得して表示を更新する', async () => {
+    const followingProgram: Program = {
+      id: 'lv100',
+      title: '更新前のフォロー番組',
+      providerType: 'community',
+      liveCycle: 'ON_AIR',
+      isFollowerOnly: false,
+      isPayProgram: false,
+      listingThumbnail: 'https://example.com/thumbnail.jpg',
+      beginAt: 1_700_000_200,
+      programProvider: { id: '100', name: '配信者A', icon: '' },
+      statistics: { watchCount: 1234, commentCount: 32 },
+    };
+    const rankingProgram: Program = {
+      id: 'lv200',
+      title: '更新前のランキング番組',
+      providerType: 'community',
+      liveCycle: 'ON_AIR',
+      isFollowerOnly: false,
+      isPayProgram: false,
+      listingThumbnail: 'https://example.com/thumbnail.jpg',
+      beginAt: 1_700_000_200,
+      programProvider: { id: '200', name: '配信者B', icon: '' },
+      statistics: { watchCount: 1234, commentCount: 32 },
+    };
+    fetchFollowingProgramsMock
+      .mockResolvedValueOnce({
+        loggedIn: true,
+        programs: [followingProgram],
+      })
+      .mockResolvedValue({
+        loggedIn: true,
+        programs: [
+          { ...followingProgram, id: 'lv101', title: '更新後のフォロー番組' },
+        ] satisfies Program[],
+      });
+    fetchMostViewedProgramsMock
+      .mockResolvedValueOnce([rankingProgram])
+      .mockResolvedValue([
+        { ...rankingProgram, id: 'lv201', title: '更新後のランキング番組' },
+      ] satisfies Program[]);
+    renderScreen();
+
+    await screen.findByText('更新前のフォロー番組');
+    await screen.findByText('更新前のランキング番組');
+    expect(fetchFollowingProgramsMock).toHaveBeenCalledOnce();
     expect(fetchMostViewedProgramsMock).toHaveBeenCalledOnce();
+
+    fireEvent.click(screen.getByRole('button', { name: '番組一覧を更新' }));
+
+    await waitFor(() => {
+      expect(screen.getByText('更新後のフォロー番組')).toBeTruthy();
+      expect(screen.getByText('更新後のランキング番組')).toBeTruthy();
+      expect(screen.queryByText('更新前のフォロー番組')).toBeNull();
+      expect(screen.queryByText('更新前のランキング番組')).toBeNull();
+    });
+    expect(fetchFollowingProgramsMock).toHaveBeenCalledTimes(2);
+    expect(fetchMostViewedProgramsMock).toHaveBeenCalledTimes(2);
   });
 });
