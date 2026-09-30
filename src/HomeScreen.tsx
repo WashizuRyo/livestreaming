@@ -10,6 +10,21 @@ import type { Program } from './nico/schema';
 const LOGIN_URL = `https://account.nicovideo.jp/spa/login/index.html?redirect_uri=${encodeURIComponent('https://live.nicovideo.jp/follow')}`;
 const LOGOUT_URL = 'https://account.nicovideo.jp/logout';
 
+function isLogoutCompleteUrl(url: string) {
+  try {
+    const { origin, pathname, searchParams } = new URL(url);
+    if (pathname !== '/') return false;
+
+    return (
+      (origin === 'https://www.nicovideo.jp' && searchParams.get('ref') === 'logout_confirm') ||
+      (origin === 'https://sp.nicovideo.jp' &&
+        (searchParams.get('ref') === 'logout_confirm' || searchParams.get('redirected') === '1'))
+    );
+  } catch {
+    return false;
+  }
+}
+
 function ProgramRow({ program, rank }: { program: Program; rank?: number }) {
   return (
     <View className="flex-row gap-3 border-b border-[#E9EDEB] py-4">
@@ -56,7 +71,7 @@ export default function HomeScreen() {
     if (!isWebViewOpen) return;
 
     if (followingPrograms.data?.loggedIn) {
-      if (url.startsWith('https://www.nicovideo.jp/') && url.includes('ref=logout_confirm')) {
+      if (isLogoutCompleteUrl(url)) {
         closeWeb();
         queryClient.setQueryData(['following'], { loggedIn: false, programs: [] });
       }
