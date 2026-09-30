@@ -12,8 +12,11 @@ const RankingResponseSchema = v.looseObject({
 });
 
 const FollowResponseSchema = v.looseObject({
-  meta: v.looseObject({ statusCode: v.literal(200) }),
-  data: v.looseObject({ programs: v.array(ProgramSchema) }),
+  meta: v.variant('statusCode', [
+    v.looseObject({ statusCode: v.literal(200) }),
+    v.looseObject({ statusCode: v.literal(401), errorCode: v.literal('UNAUTHORIZED') }),
+  ]),
+  data: v.optional(v.looseObject({ programs: v.array(ProgramSchema) })),
 });
 
 export async function fetchMostViewedPrograms(): Promise<Program[]> {
@@ -32,32 +35,26 @@ export async function fetchMostViewedPrograms(): Promise<Program[]> {
     .slice(0, 25);
 }
 
-export function parseFollowResponse(
-  status: number,
-  body: unknown,
-): { loggedIn: boolean; programs: Program[] } {
-  if (status === 401 || status === 403 || status === 302) {
-    return { loggedIn: false, programs: [] };
-  }
-  const parsed = status === 200 ? v.safeParse(FollowResponseSchema, body) : null;
-  if (!parsed?.success) throw new Error('フォロー中の放送を取得できませんでした');
-  return {
-    loggedIn: true,
-    programs: parsed.output.data.programs.filter((item) => item.liveCycle === 'ON_AIR'),
-  };
-}
-
 export async function fetchFollowingPrograms(): Promise<{
   loggedIn: boolean;
   programs: Program[];
 }> {
   const response = await fetch(FOLLOW_URL, {
+    cache: 'no-store',
     headers: { Accept: 'application/json' },
     credentials: 'include',
     redirect: 'manual',
   });
-  return parseFollowResponse(
-    response.status,
-    response.status === 200 ? await response.json() : null,
-  );
+
+  const parsed = v.safeParse(FollowResponseSchema, await response.json());
+  if (!parsed.success) throw new Error('フォロー中の放送を取得できませんでした');
+  if (parsed.output.meta.statusCode === 401) {
+    return { loggedIn: false, programs: [] };
+  }
+  if (parsed.output.data === undefined) throw new Error('フォロー中の放送を取得できませんでした');
+
+  return {
+    loggedIn: true,
+    programs: parsed.output.data.programs.filter((item) => item.liveCycle === 'ON_AIR'),
+  };
 }
